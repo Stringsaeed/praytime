@@ -3,3 +3,5 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 **/xcuserdata/
+.DS_Store
+AGENTS.md
