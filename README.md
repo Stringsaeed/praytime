@@ -94,8 +94,27 @@ The workflow builds a Release archive on macOS, packages the app as `.zip` and `
 
 Notes:
 
-- The current CI workflow builds unsigned artifacts for GitHub Releases.
-- macOS users may see Gatekeeper warnings unless you later add Developer ID signing + notarization in CI.
+- The CI release workflow is configured for Developer ID signing + notarization (to avoid Gatekeeper warnings).
+- You must add the required GitHub Actions secrets before creating a release tag.
+
+### Required GitHub Secrets (for signed + notarized releases)
+
+Add these repository secrets in **GitHub → Settings → Secrets and variables → Actions**:
+
+- `APPLE_TEAM_ID`: your Apple Developer Team ID
+- `APPLE_ID`: Apple ID email used for notarization
+- `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for that Apple ID
+- `DEVELOPER_ID_P12_BASE64`: base64-encoded `.p12` for your **Developer ID Application** certificate
+- `DEVELOPER_ID_P12_PASSWORD`: password used when exporting the `.p12`
+- `KEYCHAIN_PASSWORD`: any strong temporary password used by CI for the ephemeral keychain
+
+To create `DEVELOPER_ID_P12_BASE64` locally (example):
+
+```sh
+base64 -i DeveloperIDApplication.p12 | pbcopy
+```
+
+Paste the copied value into the GitHub secret.
 
 ## License
 
