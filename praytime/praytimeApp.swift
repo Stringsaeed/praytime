@@ -8,10 +8,19 @@
 import SwiftUI
 
 @main
-struct praytimeApp: App {
+struct PraytimeApp: App {
+    @StateObject private var store = PrayerTimesStore()
+
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        MenuBarExtra("Praytime", systemImage: "sun.and.horizon.fill") {
+            PrayerMenuView()
+                .environmentObject(store)
+        }
+        .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView()
+                .environmentObject(store)
         }
     }
 }
