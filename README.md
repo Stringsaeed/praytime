@@ -81,7 +81,22 @@ xcodebuild build \
 - Add localization and string catalogs
 - Polish menu bar icon/title behavior
 
+## Releases
+
+GitHub Actions is configured to create a GitHub Release automatically when you push a version tag:
+
+```sh
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow builds a Release archive on macOS, packages the app as `.zip` and `.dmg`, and uploads those files to the GitHub Release for that tag.
+
+Notes:
+
+- The current CI workflow builds unsigned artifacts for GitHub Releases.
+- macOS users may see Gatekeeper warnings unless you later add Developer ID signing + notarization in CI.
+
 ## License
 
 License not specified yet.
-
