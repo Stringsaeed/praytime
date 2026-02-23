@@ -94,8 +94,20 @@ The workflow builds a Release archive on macOS, packages the app as `.zip` and `
 
 Notes:
 
-- The CI release workflow is configured for Developer ID signing + notarization (to avoid Gatekeeper warnings).
+- The CI release workflow now delegates the build/sign/notarize/package steps to Fastlane.
+- The Fastlane lane uses your Xcode project settings for signing identity/team and bundle identifier (no CI override for bundle id).
 - You must add the required GitHub Actions secrets before creating a release tag.
+
+### Fastlane (local or CI)
+
+Install dependencies and run the same release lane locally:
+
+```sh
+bundle install
+bundle exec fastlane mac github_release
+```
+
+You can pass `RELEASE_VERSION=1.0.0` locally if you are not running from a Git tag context.
 
 ### Required GitHub Secrets (for signed + notarized releases)
 

@@ -1,0 +1,145 @@
+require "base64"
+require "fileutils"
+require "tmpdir"
+
+default_platform(:mac)
+
+platform :mac do
+  desc "Build, sign, notarize, and package a GitHub release for Praytime"
+  lane :github_release do
+    required_env = %w[
+      APPLE_TEAM_ID
+      APPLE_ID
+      APPLE_APP_SPECIFIC_PASSWORD
+      DEVELOPER_ID_P12_BASE64
+      DEVELOPER_ID_P12_PASSWORD
+      KEYCHAIN_PASSWORD
+    ]
+
+    required_env.each do |key|
+      value = ENV[key]
+      UI.user_error!("Missing required environment variable: #{key}") if value.to_s.strip.empty?
+    end
+
+    project_path = ENV.fetch("PROJECT_PATH", "praytime.xcodeproj")
+    scheme = ENV.fetch("SCHEME", "praytime")
+    app_name = ENV.fetch("APP_NAME", "praytime")
+
+    tag_name = ENV["GITHUB_REF_NAME"].to_s
+    version = ENV["RELEASE_VERSION"].to_s
+    version = tag_name.sub(/^v/, "") if version.empty? && !tag_name.empty?
+    version = "dev" if version.empty?
+
+    runner_temp = ENV["RUNNER_TEMP"] || Dir.tmpdir
+    workspace = ENV["GITHUB_WORKSPACE"] || Dir.pwd
+    archive_path = File.join(runner_temp, "#{app_name}.xcarchive")
+    export_path = File.join(runner_temp, "export")
+    export_options_plist = File.join(runner_temp, "ExportOptions.plist")
+    keychain_path = File.join(runner_temp, "release-signing.keychain-db")
+    cert_path = File.join(runner_temp, "developer-id.p12")
+    dist_dir = File.join(workspace, "dist")
+    base_name = "#{app_name}-#{version}-macos"
+    dmg_staging = File.join(runner_temp, "dmg-staging")
+
+    FileUtils.rm_rf(dist_dir)
+    FileUtils.mkdir_p(dist_dir)
+
+    begin
+      sh("xcodebuild", "-resolvePackageDependencies", "-project", project_path, "-scheme", scheme)
+
+      File.write(cert_path, Base64.decode64(ENV.fetch("DEVELOPER_ID_P12_BASE64")))
+
+      sh("security", "create-keychain", "-p", ENV.fetch("KEYCHAIN_PASSWORD"), keychain_path)
+      sh("security", "set-keychain-settings", "-lut", "21600", keychain_path)
+      sh("security", "unlock-keychain", "-p", ENV.fetch("KEYCHAIN_PASSWORD"), keychain_path)
+      sh("security", "import", cert_path, "-k", keychain_path, "-P", ENV.fetch("DEVELOPER_ID_P12_PASSWORD"), "-A", "-f", "pkcs12")
+      sh("security", "set-key-partition-list", "-S", "apple-tool:,apple:", "-s", "-k", ENV.fetch("KEYCHAIN_PASSWORD"), keychain_path)
+      sh("security", "list-keychains", "-d", "user", "-s", keychain_path)
+      sh("security", "default-keychain", "-d", "user", "-s", keychain_path)
+      sh("security", "find-identity", "-v", "-p", "codesigning", keychain_path)
+
+      sh(
+        "xcodebuild", "archive",
+        "-project", project_path,
+        "-scheme", scheme,
+        "-configuration", "Release",
+        "-destination", "generic/platform=macOS",
+        "-archivePath", archive_path
+      )
+
+      export_options = <<~PLIST
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>destination</key>
+          <string>export</string>
+          <key>method</key>
+          <string>developer-id</string>
+          <key>signingStyle</key>
+          <string>automatic</string>
+          <key>teamID</key>
+          <string>#{ENV.fetch("APPLE_TEAM_ID")}</string>
+        </dict>
+        </plist>
+      PLIST
+      File.write(export_options_plist, export_options)
+
+      sh(
+        "xcodebuild", "-exportArchive",
+        "-archivePath", archive_path,
+        "-exportPath", export_path,
+        "-exportOptionsPlist", export_options_plist
+      )
+
+      app_path = File.join(export_path, "#{app_name}.app")
+      UI.user_error!("Exported app not found at #{app_path}") unless File.exist?(app_path)
+
+      sh("codesign", "--verify", "--deep", "--strict", "--verbose=2", app_path)
+      sh("xcrun", "notarytool", "submit", app_path,
+         "--apple-id", ENV.fetch("APPLE_ID"),
+         "--team-id", ENV.fetch("APPLE_TEAM_ID"),
+         "--password", ENV.fetch("APPLE_APP_SPECIFIC_PASSWORD"),
+         "--wait")
+      sh("xcrun", "stapler", "staple", app_path)
+
+      packaged_app_path = File.join(dist_dir, "#{app_name}.app")
+      FileUtils.cp_r(app_path, packaged_app_path)
+
+      zip_path = File.join(dist_dir, "#{base_name}.zip")
+      sh("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", packaged_app_path, zip_path)
+
+      FileUtils.rm_rf(dmg_staging)
+      FileUtils.mkdir_p(dmg_staging)
+      FileUtils.cp_r(packaged_app_path, dmg_staging)
+      File.symlink("/Applications", File.join(dmg_staging, "Applications"))
+
+      dmg_path = File.join(dist_dir, "#{base_name}.dmg")
+      sh("hdiutil", "create",
+         "-volname", "Praytime #{version}",
+         "-srcfolder", dmg_staging,
+         "-ov",
+         "-format", "UDZO",
+         dmg_path)
+
+      sh("xcrun", "notarytool", "submit", dmg_path,
+         "--apple-id", ENV.fetch("APPLE_ID"),
+         "--team-id", ENV.fetch("APPLE_TEAM_ID"),
+         "--password", ENV.fetch("APPLE_APP_SPECIFIC_PASSWORD"),
+         "--wait")
+      sh("xcrun", "stapler", "staple", dmg_path)
+
+      checksums = sh("shasum", "-a", "256", zip_path, dmg_path).strip
+      File.write(File.join(dist_dir, "checksums.txt"), "#{checksums}\n")
+
+      FileUtils.rm_rf(packaged_app_path)
+      FileUtils.rm_rf(dmg_staging)
+    ensure
+      begin
+        sh("security", "delete-keychain", keychain_path) if File.exist?(keychain_path)
+      rescue => e
+        UI.important("Keychain cleanup failed: #{e.message}")
+      end
+    end
+  end
+end
